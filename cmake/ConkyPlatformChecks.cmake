@@ -22,7 +22,7 @@
 
 include(FindPkgConfig)
 include(CheckFunctionExists)
-include(CheckIncludeFile)
+include(CheckIncludeFiles)
 include(CheckSymbolExists)
 
 # Check for some headers
@@ -54,7 +54,7 @@ endif(CMAKE_SYSTEM_NAME MATCHES "Linux")
 
 if(CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
 	set(OS_FREEBSD true)
-	set(conky_libs ${conky_libs} -lkvm -ldevstat)
+	set(conky_libs ${conky_libs} -lkvm -ldevstat -lbsd)
 endif(CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
 
 if(CMAKE_SYSTEM_NAME MATCHES "DragonFly")
@@ -105,7 +105,7 @@ endif(BUILD_IRC)
 if(BUILD_IPV6)
 	find_file(IF_INET6 if_inet6 PATHS /proc/net)
 	if(NOT IF_INET6)
-		message(FATAL_ERROR "/proc/net/if_inet6 unavailable")
+		message(WARNING "/proc/net/if_inet6 unavailable")
 	endif(NOT IF_INET6)
 endif(BUILD_IPV6)
 
@@ -119,12 +119,12 @@ if(BUILD_HTTP)
 endif(BUILD_HTTP)
 
 if(BUILD_NCURSES)
-	check_include_file(ncurses.h NCURSES_H)
-	find_library(NCURSES_LIB NAMES ncurses)
-	if(NOT NCURSES_H OR NOT NCURSES_LIB)
+	pkg_check_modules(NCURSES ncurses)
+	if(NOT NCURSES_FOUND)
 		message(FATAL_ERROR "Unable to find ncurses library")
-	endif(NOT NCURSES_H OR NOT NCURSES_LIB)
-	set(conky_libs ${conky_libs} ${NCURSES_LIB})
+	endif(NOT NCURSES_FOUND)
+	set(conky_libs ${conky_libs} ${NCURSES_LIBRARIES})
+	set(conky_includes ${conky_includes} ${NCURSES_INCLUDE_DIRS})
 endif(BUILD_NCURSES)
 
 if(BUILD_MYSQL)
@@ -141,7 +141,8 @@ if(BUILD_MYSQL)
 endif(BUILD_MYSQL)
 
 if(BUILD_WLAN)
-	check_include_file(iwlib.h IWLIB_H -D_GNU_SOURCE)
+	set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE)
+	check_include_files(iwlib.h IWLIB_H)
 	if(NOT IWLIB_H)
 		message(FATAL_ERROR "Unable to find iwlib.h")
 	endif(NOT IWLIB_H)
@@ -167,7 +168,7 @@ endif(BUILD_PORT_MONITORS)
 
 # Check for iconv
 if(BUILD_ICONV)
-	check_include_file(iconv.h HAVE_ICONV_H)
+	check_include_files(iconv.h HAVE_ICONV_H)
 	find_library(ICONV_LIBRARY NAMES iconv)
 	if(NOT ICONV_LIBRARY)
 		# maybe iconv() is provided by libc
@@ -249,12 +250,28 @@ if(BUILD_X11)
 	endif(X11_FOUND)
 endif(BUILD_X11)
 
-pkg_search_module(LUA REQUIRED lua5.2 lua-5.2 lua>=5.1 lua5.1 lua-5.1)
+# Check whether we want Lua bindings
+if(BUILD_LUA_CAIRO OR BUILD_LUA_IMLIB2 OR BUILD_LUA_RSVG)
+	set(WANT_TOLUA true)
+endif(BUILD_LUA_CAIRO OR BUILD_LUA_IMLIB2 OR BUILD_LUA_RSVG)
+
+# Check for Lua itself
+if(WANT_TOLUA)
+	# If we need tolua++, we must compile against Lua 5.1
+	pkg_search_module(LUA REQUIRED lua5.1 lua-5.1 lua51 lua)
+	if(NOT LUA_VERSION VERSION_LESS 5.2.0)
+		message(FATAL_ERROR "Unable to find Lua 5.1.x")
+	endif(NOT LUA_VERSION VERSION_LESS 5.2.0)
+else(WANT_TOLUA)
+	# Otherwise, use the most recent Lua version
+	pkg_search_module(LUA REQUIRED lua>=5.3 lua5.3 lua-5.3 lua53 lua5.2 lua-5.2 lua52 lua5.1 lua-5.1 lua51 lua>=5.1)
+endif(WANT_TOLUA)
 set(conky_libs ${conky_libs} ${LUA_LIBRARIES})
 set(conky_includes ${conky_includes} ${LUA_INCLUDE_DIRS})
 link_directories(${LUA_LIBRARY_DIRS})
+
+# Check for libraries used by Lua bindings
 if(BUILD_LUA_CAIRO)
-	set(WANT_TOLUA true)
 	pkg_check_modules(CAIRO REQUIRED cairo cairo-xlib)
 	set(luacairo_libs ${CAIRO_LIBRARIES} ${LUA_LIBRARIES})
 	set(luacairo_includes ${CAIRO_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS})
@@ -264,13 +281,11 @@ if(BUILD_LUA_CAIRO)
 	endif(NOT APP_PATCH)
 endif(BUILD_LUA_CAIRO)
 if(BUILD_LUA_IMLIB2)
-	set(WANT_TOLUA true)
-	pkg_check_modules(IMLIB2 imlib2)
+	pkg_search_module(IMLIB2 REQUIRED imlib2 Imlib2)
 	set(luaimlib2_libs ${IMLIB2_LIB} ${LUA_LIBRARIES})
 	set(luaimlib2_includes ${IMLIB2_INCLUDE_PATH} ${LUA_INCLUDE_DIRS})
 endif(BUILD_LUA_IMLIB2)
 if(BUILD_LUA_RSVG)
-	set(WANT_TOLUA true)
 	pkg_check_modules(RSVG REQUIRED librsvg-2.0)
 	set(luarsvg_libs ${RSVG_LIBRARIES} ${LUA_LIBRARIES})
 	set(luarsvg_includes ${RSVG_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS})
@@ -345,6 +360,18 @@ if(BUILD_IMLIB2)
 	set(conky_includes ${conky_includes} ${IMLIB2_INCLUDE_PATH})
 endif(BUILD_IMLIB2)
 
+if(BUILD_JOURNAL)
+	pkg_search_module(SYSTEMD REQUIRED libsystemd)
+	set(conky_libs ${conky_libs} ${SYSTEMD_LIB} ${SYSTEMD_LDFLAGS})
+	set(conky_includes ${conky_includes} ${SYSTEMD_INCLUDE_PATH})
+endif(BUILD_JOURNAL)
+
+if(BUILD_PULSEAUDIO)
+	pkg_check_modules(PULSEAUDIO REQUIRED libpulse)
+	set(conky_libs ${conky_libs} ${PULSEAUDIO_LIBRARIES})
+	set(conky_includes ${conky_includes} ${PULSEAUDIO_INCLUDE_DIRS})
+endif(BUILD_PULSEAUDIO)
+
 # Common libraries
 if(WANT_GLIB)
 	pkg_check_modules(GLIB REQUIRED glib-2.0)
@@ -365,11 +392,11 @@ if(WANT_LIBXML2)
 endif(WANT_LIBXML2)
 
 if(WANT_TOLUA)
-	find_program(APP_TOLUA NAMES tolua++ tolua++5.1 tolua++-5.1)
+	find_program(APP_TOLUA NAMES toluapp tolua++ tolua++5.1 tolua++-5.1)
 	if(NOT APP_TOLUA)
 		message(FATAL_ERROR "Unable to find program 'tolua++'")
 	endif(NOT APP_TOLUA)
-	find_library(TOLUA_LIBS NAMES tolua++ tolua++5.1 tolua++-5.1)
+	find_library(TOLUA_LIBS NAMES toluapp tolua++ tolua++5.1 tolua++-5.1)
 	find_path(TOLUA_INCLUDE_PATH tolua++.h ${INCLUDE_SEARCH_PATH})
 	if(TOLUA_INCLUDE_PATH AND TOLUA_LIBS)
 		set(TOLUA_FOUND true)
@@ -422,6 +449,6 @@ if(DEBUG)
 	execute_process(COMMAND
 		${APP_GIT} --git-dir=${CMAKE_CURRENT_SOURCE_DIR}/.git log
 		--since=${VERSION_MAJOR}-${VERSION_MINOR}-01 --pretty=oneline COMMAND
-		${APP_WC} -l COMMAND ${APP_GAWK} "{print $1}" RESULT_VARIABLE RETVAL
+		${APP_WC} -l COMMAND ${APP_AWK} "{print $1}" RESULT_VARIABLE RETVAL
 		OUTPUT_VARIABLE COMMIT_COUNT OUTPUT_STRIP_TRAILING_WHITESPACE)
 endif(DEBUG)

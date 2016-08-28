@@ -20,6 +20,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+#set(RELEASE true)
+
 # Set system vars
 if(CMAKE_SYSTEM_NAME MATCHES "Linux")
 	set(OS_LINUX true)
@@ -65,14 +67,14 @@ set(conky_includes ${conky_includes} -I/usr/pkg/include)
 endif(OS_DRAGONFLY)
 
 # Do version stuff
-set(VERSION_MAJOR "2")
-set(VERSION_MINOR "0")
-set(VERSION_PATCH "0")
+set(VERSION_MAJOR "1")
+set(VERSION_MINOR "10")
+set(VERSION_PATCH "4")
 
-find_program(APP_GAWK gawk)
-if(NOT APP_GAWK)
-	message(FATAL_ERROR "Unable to find program 'gawk'")
-endif(NOT APP_GAWK)
+find_program(APP_AWK awk)
+if(NOT APP_AWK)
+	message(FATAL_ERROR "Unable to find program 'awk'")
+endif(NOT APP_AWK)
 
 find_program(APP_WC wc)
 if(NOT APP_WC)
@@ -97,7 +99,7 @@ if(NOT RELEASE)
 	mark_as_advanced(APP_GIT)
 endif(NOT RELEASE)
 
-mark_as_advanced(APP_GAWK APP_WC APP_DATE APP_UNAME)
+mark_as_advanced(APP_AWK APP_WC APP_DATE APP_UNAME)
 
 #BUILD_DATE=$(LANG=en_US LC_ALL=en_US LOCALE=en_US date)
 #BUILD_ARCH="$(uname -sr) ($(uname -m))"
@@ -112,7 +114,7 @@ else(RELEASE)
 	set(VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}_pre${COMMIT_COUNT}")
 endif(RELEASE)
 
-set(COPYRIGHT "Copyright Brenden Matthews, et al, 2005-2010")
+set(COPYRIGHT "Copyright Brenden Matthews, et al, 2005-2015")
 
 macro(AC_SEARCH_LIBS FUNCTION_NAME INCLUDES TARGET_VAR)
 	if("${TARGET_VAR}" MATCHES "^${TARGET_VAR}$")

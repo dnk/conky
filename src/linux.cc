@@ -144,7 +144,7 @@ int check_mount(struct text_object *obj)
 		return 0;
 
 	if ((mtab = fopen("/etc/mtab", "r"))) {
-		char buf1[256], buf2[128];
+		char buf1[256], buf2[129];
 
 		while (fgets(buf1, 256, mtab)) {
 			sscanf(buf1, "%*s %128s", buf2);
@@ -367,10 +367,24 @@ void print_gateway_ip(struct text_object *obj, char *p, int p_max_size)
 	snprintf(p, p_max_size, "%s", gw_info.ip);
 }
 
+
+/**
+ * Parses information from /proc/net/dev and stores them in ???
+ *
+ * For the output format of /proc/net/dev @see http://linux.die.net/man/5/proc
+ *
+ * @return always returns 0. May change in the future, e.g. returning non zero
+ * if some error happened
+ **/
 int update_net_stats(void)
 {
 	FILE *net_dev_fp;
 	static int rep = 0;
+	/* variably to notify the parts averaging the download speed, that this
+	 * is the first call ever to this function. This variable can't be used
+	 * to decide if this is the first time an interface was parsed as there
+	 * are many interfaces, which can be activated and deactivated at arbitrary
+	 * times */
 	static char first = 1;
 
 	// FIXME: arbitrary size chosen to keep code simple.
@@ -394,12 +408,15 @@ int update_net_stats(void)
 		return 0;
 	}
 
-	/* open file and ignore first two lines */
+	/* open file /proc/net/dev. If not something went wrong, clear all
+	 * network statistics */
 	if (!(net_dev_fp = open_file("/proc/net/dev", &rep))) {
 		clear_net_stats();
 		return 0;
 	}
-
+	/* ignore first two header lines in file /proc/net/dev. If somethings
+	 * goes wrong, e.g. end of file reached, quit.
+	 * (Why isn't clear_net_stats called for this case ??? */
 	if (!fgets(buf, 255, net_dev_fp) ||  /* garbage */
 	    !fgets(buf, 255, net_dev_fp)) {  /* garbage (field names) */
 		fclose(net_dev_fp);
@@ -413,48 +430,70 @@ int update_net_stats(void)
 		char temp_addr[18];
 		long long r, t, last_recv, last_trans;
 
+		/* quit only after all non-header lines from /proc/net/dev parsed */
 		if (fgets(buf, 255, net_dev_fp) == NULL) {
 			break;
 		}
 		p = buf;
-		while (isspace((int) *p)) {
+		/* change char * p to first non-space character, which is the beginning
+		 * of the interface name */
+		while (*p != '\0' && isspace((int) *p)) {
 			p++;
 		}
 
 		s = p;
 
-		while (*p && *p != ':') {
+		/* increment p until the end of the interface name has been reached */
+		while (*p != '\0' && *p != ':') {
 			p++;
 		}
 		if (*p == '\0') {
 			continue;
 		}
+		/* replace ':' with '\0' in output of /proc/net/dev */
 		*p = '\0';
 		p++;
 
+		/* get pointer to interface statistics with the interface name in s */
 		ns = get_net_stat(s, NULL, NULL);
 		ns->up = 1;
 		memset(&(ns->addr.sa_data), 0, 14);
 
 		memset(ns->addrs, 0, 17 * MAX_NET_INTERFACES + 1); /* Up to 17 chars per ip, max MAX_NET_INTERFACES interfaces. Nasty memory usage... */
 
-		last_recv = ns->recv;
-		last_trans = ns->trans;
-
 		/* bytes packets errs drop fifo frame compressed multicast|bytes ... */
 		sscanf(p, "%lld  %*d     %*d  %*d  %*d  %*d   %*d        %*d       %lld",
 			&r, &t);
 
-		/* if recv or trans is less than last time, an overflow happened */
+		/* if the interface is parsed the first time, then set recv and trans
+		 * to currently received, meaning the change in network traffic is 0 */
+		if (ns->last_read_recv == -1) {
+			ns->recv = r;
+			first = 1;
+			ns->last_read_recv = r;
+		}
+		if (ns->last_read_trans == -1) {
+			ns->trans = t;
+			first = 1;
+			ns->last_read_trans = t;
+		}
+		/* move current traffic statistic to last thereby obsoleting the
+		 * current statistic */
+		last_recv  = ns->recv;
+		last_trans = ns->trans;
+
+		/* If recv or trans is less than last time, an overflow happened.
+		 * In that case set the last traffic to the current one, don't set
+		 * it to 0, else a spike in the download and upload speed will occur! */
 		if (r < ns->last_read_recv) {
-			last_recv = 0;
+			last_recv = r;
 		} else {
 			ns->recv += (r - ns->last_read_recv);
 		}
 		ns->last_read_recv = r;
 
 		if (t < ns->last_read_trans) {
-			last_trans = 0;
+			last_trans = t;
 		} else {
 			ns->trans += (t - ns->last_read_trans);
 		}
@@ -490,19 +529,19 @@ int update_net_stats(void)
 		close((long) i);
 
 		free(conf.ifc_buf);
-
 		/*** end ip addr patch ***/
 
 		if (!first) {
-			/* calculate speeds */
-			ns->net_rec[0] = (ns->recv - last_recv) / delta;
+			/* calculate instantenous speeds */
+			ns->net_rec  [0] = (ns->recv  - last_recv ) / delta;
 			ns->net_trans[0] = (ns->trans - last_trans) / delta;
 		}
 
 		curtmp1 = 0;
 		curtmp2 = 0;
-		// get an average
+		/* get an average over the last speed samples */
 		int samples = net_avg_samples.get(*state);
+		/* is OpenMP actually useful here? How large is samples? > 1000 ? */
 #ifdef HAVE_OPENMP
 #pragma omp parallel for reduction(+:curtmp1, curtmp2) schedule(dynamic,10)
 #endif /* HAVE_OPENMP */
@@ -593,7 +632,7 @@ int update_net_stats(void)
 
 #ifdef BUILD_IPV6
 	FILE *file;
-	char v6addr[32];
+	char v6addr[33];
 	char devname[21];
 	unsigned int netmask, scope;
 	struct net_stat *ns;
@@ -643,8 +682,8 @@ int update_net_stats(void)
 			}
 			lastv6->next = NULL;
 		}
+		fclose(file);
 	}
-	fclose(file);
 #endif /* BUILD_IPV6 */
 
 	first = 0;
@@ -762,13 +801,14 @@ void get_cpu_count(void)
 {
 	FILE *stat_fp;
 	static int rep = 0;
+	int highest_cpu_index;
 	char buf[256];
 
 	if (info.cpu_usage) {
 		return;
 	}
 
-	if (!(stat_fp = open_file("/proc/stat", &rep))) {
+	if (!(stat_fp = open_file("/sys/devices/system/cpu/present", &rep))) {
 		return;
 	}
 
@@ -779,13 +819,11 @@ void get_cpu_count(void)
 			break;
 		}
 
-		if (strncmp(buf, "cpu", 3) == 0 && isdigit(buf[3])) {
-			if (info.cpu_count == 0) {
-				determine_longstat(buf);
-			}
-			info.cpu_count++;
+		if (sscanf(buf, "%*d-%d", &highest_cpu_index) == 1) {
+			info.cpu_count = highest_cpu_index;
 		}
 	}
+	++info.cpu_count;
 	info.cpu_usage = (float*)malloc((info.cpu_count + 1) * sizeof(float));
 
 	fclose(stat_fp);
@@ -1898,14 +1936,14 @@ void get_battery_stuff(char *buffer, unsigned int n, const char *bat, int item)
 				snprintf(last_battery_str[idx], 64, "unknown %d%%",
 					(int) (((float)remaining_capacity / acpi_last_full[idx]) * 100));
 			else
-				strncpy(last_battery_str[idx], "AC", 64);
+				strncpy(last_battery_str[idx], "not present", 64);
 		}
 	} else if (acpi_bat_fp[idx] != NULL) {
 		/* ACPI */
 		int present_rate = -1;
 		int remaining_capacity = -1;
 		char charging_state[64];
-		char present[4];
+		char present[5];
 
 		/* read last full capacity if it's zero */
 		if (acpi_last_full[idx] == 0) {
@@ -2000,7 +2038,7 @@ void get_battery_stuff(char *buffer, unsigned int n, const char *bat, int item)
 						(long) ((remaining_capacity * 3600) / present_rate));
 			} else if (present_rate == 0) {	/* Thanks to Nexox for this one */
 				snprintf(last_battery_str[idx],
-						sizeof(last_battery_str[idx]) - 1, "full");
+						sizeof(last_battery_str[idx]) - 1, "charged");
 				snprintf(last_battery_time_str[idx],
 						sizeof(last_battery_time_str[idx]) - 1, "unknown");
 			} else {
@@ -2023,13 +2061,13 @@ void get_battery_stuff(char *buffer, unsigned int n, const char *bat, int item)
 			/* unknown, probably full / AC */
 		} else {
 			if (strncmp(charging_state, "Full", 64) == 0) {
-				strncpy(last_battery_str[idx], "full", 64);
+				strncpy(last_battery_str[idx], "charged", 64);
 			} else if (acpi_last_full[idx] != 0
 					&& remaining_capacity != acpi_last_full[idx]) {
 				snprintf(last_battery_str[idx], 64, "unknown %d%%",
 						(int) ((remaining_capacity * 100) / acpi_last_full[idx]));
 			} else {
-				strncpy(last_battery_str[idx], "AC", 64);
+				strncpy(last_battery_str[idx], "not present", 64);
 			}
 		}
 		fclose(acpi_bat_fp[idx]);
@@ -2050,7 +2088,7 @@ void get_battery_stuff(char *buffer, unsigned int n, const char *bat, int item)
 
 			if (life == -1) {
 				/* could check now that there is ac */
-				snprintf(last_battery_str[idx], 64, "AC");
+				snprintf(last_battery_str[idx], 64, "not present");
 
 			/* could check that status == 3 here? */
 			} else if (ac && life != 100) {
@@ -2101,10 +2139,11 @@ void get_battery_short_status(char *buffer, unsigned int n, const char *bat)
 	} else if (0 == strncmp("empty", buffer, 5)) {
 		buffer[0] = 'E';
 		memmove(buffer + 1, buffer + 5, n - 5);
-	} else if (0 != strncmp("AC", buffer, 2)) {
+	} else if (0 == strncmp("unknown", buffer, 7)) {
 		buffer[0] = 'U';
-		memmove(buffer + 1, buffer + 2, n - 2);
+		memmove(buffer + 1, buffer + 7, n - 7);
 	}
+	// Otherwise, don't shorten.
 }
 
 int _get_battery_perct(const char *bat)
@@ -2627,6 +2666,7 @@ static void process_parse_stat(struct process *process)
 {
 	char line[BUFFER_LEN] = { 0 }, filename[BUFFER_LEN], procname[BUFFER_LEN];
 	char cmdline[BUFFER_LEN] = { 0 }, cmdline_filename[BUFFER_LEN], cmdline_procname[BUFFER_LEN];
+	char basename[BUFFER_LEN] = { 0 };
 	char tmpstr[BUFFER_LEN] = { 0 };
 	char state[4];
 	int ps, cmdline_ps;
@@ -2674,36 +2714,39 @@ static void process_parse_stat(struct process *process)
 		return;
 	}
 
-	/* Some processes have null-separated arguments, let's fix it */
-	for(int i = 0; i < endl; i++)
-		if (cmdline[i] == 0)
+	/* Some processes have null-separated arguments (see proc(5)); let's fix it */
+	int i = endl;
+	while (i && cmdline[i-1] == 0) {
+		/* Skip past any trailing null characters */
+		--i;
+	}
+	while (i--) {
+		/* Replace null character between arguments with a space */
+		if (cmdline[i] == 0) {
 			cmdline[i] = ' ';
+		}
+	}
 
 	cmdline[endl] = 0;
+
 	/* We want to transform for example "/usr/bin/python program.py" to "python program.py"
 	 * 1. search for first space
 	 * 2. search for last / before first space
-	 * 3. copy string from it's position */
-
-	char * space_ptr = strchr(cmdline, ' ');
-	if (space_ptr == NULL)
-	{
+	 * 3. copy string from its position
+	 */
+	char *space_ptr = strchr(cmdline, ' ');
+	if (space_ptr == NULL) {
 		strcpy(tmpstr, cmdline);
-	}
-	else
-	{
+	} else {
 		long int space_pos = space_ptr - cmdline;
 		strncpy(tmpstr, cmdline, space_pos);
 		tmpstr[space_pos] = 0;
 	}
 
-	char * slash_ptr = strrchr(tmpstr, '/');
-	if (slash_ptr == NULL )
-	{
+	char *slash_ptr = strrchr(tmpstr, '/');
+	if (slash_ptr == NULL) {
 		strncpy(cmdline_procname, cmdline, BUFFER_LEN);
-	}
-	else
-	{
+	} else {
 		long int slash_pos = slash_ptr - tmpstr;
 		strncpy(cmdline_procname, cmdline + slash_pos + 1, BUFFER_LEN - slash_pos);
 		cmdline_procname[BUFFER_LEN - slash_pos] = 0;
@@ -2712,15 +2755,16 @@ static void process_parse_stat(struct process *process)
 	/* Extract cpu times from data in /proc filesystem */
 	lparen = strchr(line, '(');
 	rparen = strrchr(line, ')');
-	if(!lparen || !rparen || rparen < lparen)
+	if (!lparen || !rparen || rparen < lparen)
 		return; // this should not happen
 
 	rc = MIN((unsigned)(rparen - lparen - 1), sizeof(procname) - 1);
 	strncpy(procname, lparen + 1, rc);
 	procname[rc] = '\0';
+	strncpy(basename, procname, strlen(procname) + 1);
 
 	if (strlen(procname) < strlen(cmdline_procname))
-		strncpy(procname, cmdline_procname, strlen(cmdline_procname)+1);
+		strncpy(procname, cmdline_procname, strlen(cmdline_procname) + 1);
 
 	rc = sscanf(rparen + 1, "%3s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %lu "
 			"%lu %*s %*s %*s %d %*s %*s %*s %llu %llu", state, &process->user_time,
@@ -2730,43 +2774,13 @@ static void process_parse_stat(struct process *process)
 		return;
 	}
 
-	if(state[0]=='R')
+	if (state[0] == 'R')
 		++ info.run_procs;
 
-	/* remove any "kdeinit: " */
-	if (procname == strstr(procname, "kdeinit")) {
-		snprintf(filename, sizeof(filename), PROCFS_CMDLINE_TEMPLATE,
-				process->pid);
-
-		ps = open(filename, O_RDONLY);
-		if (ps < 0) {
-			/* The process must have finished in the last few jiffies! */
-			return;
-		}
-
-		endl = read(ps, line, BUFFER_LEN - 1);
-		close(ps);
-		if(endl < 0)
-			return;
-		line[endl] = 0;
-
-		/* account for "kdeinit: " */
-		if ((char *) line == strstr(line, "kdeinit: ")) {
-			r = ((char *) line) + 9;
-		} else {
-			r = (char *) line;
-		}
-
-		q = procname;
-		/* stop at space */
-		while (*r && *r != ' ') {
-			*q++ = *r++;
-		}
-		*q = 0;
-	}
-
 	free_and_zero(process->name);
+	free_and_zero(process->basename);
 	process->name = strndup(procname, text_buffer_size.get(*::state));
+	process->basename = strndup(basename, text_buffer_size.get(*::state));
 	process->rss *= getpagesize();
 
 	process->total_cpu_time = process->user_time + process->kernel_time;
