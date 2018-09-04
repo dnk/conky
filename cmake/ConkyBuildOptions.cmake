@@ -1,10 +1,9 @@
-# vim: ts=4 sw=4 noet ai cindent syntax=cmake
 #
 # Conky, a system monitor, based on torsmo
 #
 # Please see COPYING for details
 #
-# Copyright (c) 2005-2010 Brenden Matthews, et. al. (see AUTHORS)
+# Copyright (c) 2005-2018 Brenden Matthews, et. al. (see AUTHORS)
 # All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
@@ -34,7 +33,9 @@ endif(NOT CMAKE_BUILD_TYPE)
 
 # -std options for all build types
 set(CMAKE_C_FLAGS "-std=c99 ${CMAKE_C_FLAGS}" CACHE STRING "Flags used by the C compiler during all build types." FORCE)
-set(CMAKE_CXX_FLAGS "-std=c++0x ${CMAKE_CXX_FLAGS}" CACHE STRING "Flags used by the C++ compiler during all build types." FORCE)
+set(CMAKE_CXX_FLAGS "-std=c++17 ${CMAKE_CXX_FLAGS}" CACHE STRING "Flags used by the C++ compiler during all build types." FORCE)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(MAINTAINER_MODE)
 	# some extra debug flags when in 'maintainer mode'
@@ -42,6 +43,7 @@ if(MAINTAINER_MODE)
 	set(CMAKE_CXX_FLAGS_DEBUG "-ggdb -Wall -W -Wextra -Wunused -pedantic -Werror -Wno-format ${CMAKE_CXX_FLAGS_DEBUG}" CACHE STRING "Flags used by the compiler during debug builds." FORCE)
 endif(MAINTAINER_MODE)
 
+option(CHECK_CODE_QUALITY "Check code formatting/quality with clang" false)
 
 option(RELEASE "Build release package" false)
 mark_as_advanced(RELEASE)
@@ -61,6 +63,12 @@ if (NOT LIB_INSTALL_DIR)
 endif (NOT LIB_INSTALL_DIR)
 set(PACKAGE_LIBRARY_DIR "${LIB_INSTALL_DIR}/conky" CACHE STRING "Package library path (where Lua bindings are installed" FORCE)
 set(DEFAULTNETDEV "eth0" CACHE STRING "Default networkdevice")
+
+# Mac only override
+if(OS_DARWIN)
+	set(DEFAULTNETDEV "en0" CACHE STRING "Default networkdevice" FORCE)
+endif(OS_DARWIN)
+
 set(XDG_CONFIG_FILE "$HOME/.config/conky/conky.conf" CACHE STRING "Configfile of the user (XDG)")
 set(CONFIG_FILE "$HOME/.conkyrc" CACHE STRING "Configfile of the user")
 set(MAX_USER_TEXT_DEFAULT "16384" CACHE STRING "Default maximum size of config TEXT buffer, i.e. below TEXT line.")
@@ -74,7 +82,6 @@ if(OS_LINUX)
 	option(BUILD_PORT_MONITORS "Build TCP portmon support" true)
 	option(BUILD_IBM "Support for IBM/Lenovo notebooks" true)
 	option(BUILD_HDDTEMP "Support for hddtemp" true)
-	option(BUILD_WLAN "Enable wireless support" false)
 	# nvidia may also work on FreeBSD, not sure
 	option(BUILD_NVIDIA "Enable nvidia support" false)
 	option(BUILD_IPV6 "Enable if you want IPv6 support" true)
@@ -82,13 +89,19 @@ else(OS_LINUX)
 	set(BUILD_PORT_MONITORS false)
 	set(BUILD_IBM false)
 	set(BUILD_HDDTEMP false)
-	set(BUILD_WLAN false)
 	set(BUILD_NVIDIA false)
 	set(BUILD_IPV6 false)
 endif(OS_LINUX)
 
+# macOS Only
+if(OS_DARWIN)
+	option(BUILD_IPGFREQ "Enable cpu freq calculation based on Intel® Power Gadget; otherwise use constant factory value" false)
+endif(OS_DARWIN)
+
 # Optional features etc
 #
+
+option(BUILD_WLAN "Enable wireless support" false)
 
 option(BUILD_BUILTIN_CONFIG "Enable builtin default configuration" true)
 
@@ -108,12 +121,19 @@ endif(BUILD_NCURSES)
 option(BUILD_X11 "Build X11 support" true)
 if(BUILD_X11)
 	option(OWN_WINDOW "Enable own_window support" true)
-	option(BUILD_XDAMAGE "Build Xdamage support" true)
+
+	# Mac Fix
+	if(OS_DARWIN)
+		option(BUILD_XDAMAGE "Build Xdamage support" false)
+	else(OS_DARWIN)
+		option(BUILD_XDAMAGE "Build Xdamage support" true)
+	endif(OS_DARWIN)
+
 	option(BUILD_XINERAMA "Build Xinerama support" true)
-	option(BUILD_XDBE "Build Xdbe (double-buffer) support" false)
+	option(BUILD_XDBE "Build Xdbe (double-buffer) support" true)
 	option(BUILD_XFT "Build Xft (freetype fonts) support" true)
-	option(BUILD_IMLIB2 "Enable Imlib2 support" false)
-	option(BUILD_XSHAPE "Enable Xshape support" false)
+	option(BUILD_IMLIB2 "Enable Imlib2 support" true)
+	option(BUILD_XSHAPE "Enable Xshape support" true)
 else(BUILD_X11)
 	set(OWN_WINDOW false CACHE BOOL "Enable own_window support" FORCE)
 	set(BUILD_XDAMAGE false CACHE BOOL "Build Xdamage support" FORCE)
@@ -146,20 +166,16 @@ option(BUILD_MOC "Enable if you want MOC (music player) support" true)
 
 option(BUILD_XMMS2 "Enable if you want XMMS2 (music player) support" false)
 
-option(BUILD_EVE "Enable if you want Eve-Online skill monitoring support" false)
+option(BUILD_EVE "Enable if you want Eve-Online skill monitoring support" true)
 
 option(BUILD_CURL "Enable if you want Curl support" false)
 
 option(BUILD_RSS "Enable if you want RSS support" false)
 
-option(BUILD_WEATHER_METAR "Enable METAR weather support" false)
-option(BUILD_WEATHER_XOAP "Enable XOAP weather support" false)
-if(BUILD_WEATHER_METAR OR BUILD_WEATHER_XOAP OR BUILD_RSS)
+option(BUILD_WEATHER_METAR "Enable METAR weather support" true)
+if(BUILD_WEATHER_METAR OR BUILD_RSS)
 	set(BUILD_CURL true)
-endif(BUILD_WEATHER_METAR OR BUILD_WEATHER_XOAP OR BUILD_RSS)
-if(BUILD_WEATHER_XOAP)
-	set(XOAP_FILE "$HOME/.xoaprc" CACHE STRING "Path of XOAP file for weather" FORCE)
-endif(BUILD_WEATHER_XOAP)
+endif(BUILD_WEATHER_METAR OR BUILD_RSS)
 
 option(BUILD_APCUPSD "Enable APCUPSD support" true)
 
@@ -174,7 +190,7 @@ endif(BUILD_HTTP)
 
 option(BUILD_ICONV "Enable iconv support" false)
 
-option(BUILD_CMUS "Enable support for cmus music player" false)
+option(BUILD_CMUS "Enable support for cmus music player" true)
 
 option(BUILD_JOURNAL "Enable support for reading from the systemd journal" false)
 
